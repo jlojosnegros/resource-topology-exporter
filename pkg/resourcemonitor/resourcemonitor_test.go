@@ -180,7 +180,13 @@ func TestNormalizeContainerDevices(t *testing.T) {
 	coreIDToNodeIDMap := getExpectedCoreToNodeMap()
 
 	Convey("When normalizing the container devices from pod resources", t, func() {
-		res := NormalizeContainerDevices(availRes.GetDevices(), availRes.GetMemory(), availRes.GetCpuIds(), coreIDToNodeIDMap)
+		topo := ghw.TopologyInfo{
+			Nodes: []*ghw.TopologyNode{
+				{ID: 0},
+				{ID: 1},
+			},
+		}
+		res := NormalizeContainerDevices(availRes.GetDevices(), availRes.GetMemory(), availRes.GetCpuIds(), &topo, coreIDToNodeIDMap)
 		expected := []*podresourcesapi.ContainerDevices{
 			{
 				ResourceName: "fake.io/net",
