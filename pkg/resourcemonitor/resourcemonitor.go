@@ -143,6 +143,7 @@ func (rm *resourceMonitor) Scan(excludeList ResourceExcludeList) (topologyv1alph
 	defer cancel()
 	resp, err := rm.podResCli.List(ctx, &podresourcesapi.ListPodResourcesRequest{})
 	if err != nil {
+		klog.Errorf("List error: %v", err)
 		prometheus.UpdatePodResourceApiCallsFailureMetric("list")
 		return nil, err
 	}
@@ -195,7 +196,7 @@ func (rm *resourceMonitor) Scan(excludeList ResourceExcludeList) (topologyv1alph
 			}
 
 			resUsed := allocated[nodeID][resName]
-
+			klog.Infof("resName: %v resAlloc: %v resUsed: %v", resName, resAlloc, resUsed)
 			resAvail := resAlloc - resUsed
 			if resAvail < 0 {
 				klog.Warningf("negative size for %q on zone %q", resName.String(), zone.Name)

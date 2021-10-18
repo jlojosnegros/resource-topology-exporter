@@ -108,7 +108,7 @@ var _ = ginkgo.Describe("[RTE][InfraConsuming] Resource topology exporter", func
 					return false
 				}
 				return finalNodeTopo.ObjectMeta.ResourceVersion != initialNodeTopo.ObjectMeta.ResourceVersion
-			}, 3*time.Second, 1*time.Second).Should(gomega.BeTrue(), "didn't get updated node topology info")
+			}, 30*time.Second, 2*time.Second).Should(gomega.BeTrue(), "didn't get updated node topology info")
 			ginkgo.By("checking the topology was updated for the right reason")
 
 			gomega.Expect(finalNodeTopo.Annotations).ToNot(gomega.BeNil(), "missing annotations entirely")
