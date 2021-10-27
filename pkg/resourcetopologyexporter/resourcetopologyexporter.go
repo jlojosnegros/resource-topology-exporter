@@ -2,7 +2,6 @@ package resourcetopologyexporter
 
 import (
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -11,17 +10,12 @@ import (
 	podresourcesapi "k8s.io/kubelet/pkg/apis/podresources/v1"
 
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/kubeconf"
+	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/notification"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/nrtupdater"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/podrescli"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/prometheus"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/resourcemonitor"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/topologypolicy"
-)
-
-const (
-	StateCPUManager    string = "cpu_manager_state"
-	StateMemoryManager string = "memory_manager_state"
-	StateDeviceManager string = "kubelet_internal_checkpoint"
 )
 
 type Args struct {
@@ -33,6 +27,8 @@ type Args struct {
 	KubeletStateDirs       []string
 	PodResourcesSocketPath string
 	SleepInterval          time.Duration
+	NotifyFilePath         string
+	NotifyFileReuse        bool
 }
 
 type PollTrigger struct {
@@ -66,18 +62,17 @@ func Execute(cli podresourcesapi.PodResourcesListerClient, nrtupdaterArgs nrtupd
 	}
 	defer watcher.Close()
 
-	for _, stateDir := range rteArgs.KubeletStateDirs {
-		klog.Infof("kubelet state dir: [%s]", stateDir)
-		if stateDir == "" {
-			continue
-		}
-		err := watcher.Add(stateDir)
-		if err != nil {
-			klog.Infof("error adding watch on [%s]: %v", stateDir, err)
-		} else {
-			klog.Infof("added watch on [%s]", stateDir)
-		}
+	filterFile, err := notification.AddFile(watcher, rteArgs.NotifyFilePath, rteArgs.NotifyFileReuse)
+	if err != nil {
+		return err
 	}
+
+	filterDirs, err := notification.AddDirs(watcher, rteArgs.KubeletStateDirs)
+	if err != nil {
+		return err
+	}
+
+	filterEvent := notification.MakeFilter(filterFile, filterDirs)
 
 	eventsChan <- PollTrigger{Timestamp: time.Now()}
 	klog.V(2).Infof("initial update trigger")
@@ -92,7 +87,7 @@ func Execute(cli podresourcesapi.PodResourcesListerClient, nrtupdaterArgs nrtupd
 
 		case event := <-watcher.Events:
 			klog.V(5).Infof("fsnotify event from %q: %v", event.Name, event.Op)
-			if IsTriggeringFSNotifyEvent(event) {
+			if filterEvent(event) {
 				eventsChan <- PollTrigger{Timestamp: time.Now()}
 				klog.V(4).Infof("fsnotify update trigger")
 			}
@@ -120,21 +115,6 @@ func getTopologyManagerPolicy(resourcemonitorArgs resourcemonitor.Args, rteArgs 
 		return topologypolicy.DetectTopologyPolicy(klConfig.TopologyManagerPolicy, klConfig.TopologyManagerScope), nil
 	}
 	return "", fmt.Errorf("cannot find the kubelet Topology Manager policy")
-}
-
-func IsTriggeringFSNotifyEvent(event fsnotify.Event) bool {
-	filename := filepath.Base(event.Name)
-	if filename != StateCPUManager &&
-		filename != StateMemoryManager &&
-		filename != StateDeviceManager {
-		return false
-	}
-	// turns out rename is reported as
-	// 1. RENAME (old) <- unpredictable
-	// 2. CREATE (new) <- we trigger here
-	// admittedly we can get some false positives, but that
-	// is expected to be not that big of a deal.
-	return (event.Op & fsnotify.Create) == fsnotify.Create
 }
 
 type ResourceMonitor struct {
