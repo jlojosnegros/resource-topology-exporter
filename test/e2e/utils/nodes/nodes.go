@@ -19,31 +19,16 @@ package nodes
 import (
 	"context"
 	"fmt"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/json"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/kubernetes/test/e2e/framework"
-)
 
-const (
-	// RoleWorker contains the worker role
-	RoleWorker = "worker"
-	// DefaultNodeName we rely on kind for our CI
-	DefaultNodeName = "kind-worker"
-)
-
-const (
-	// LabelRole contains the key for the role label
-	LabelRole = "node-role.kubernetes.io"
-	// LabelHostname contains the key for the hostname label
-	LabelHostname = "kubernetes.io/hostname"
-
-	TestNodeLabel = "rte-e2e-test-node"
+	e2eutils "github.com/k8stopologyawareschedwg/resource-topology-exporter/test/e2e/utils"
 )
 
 type patchMapStringStringValue struct {
@@ -54,12 +39,12 @@ type patchMapStringStringValue struct {
 
 // GetWorkerNodes returns all nodes labeled as worker
 func GetWorkerNodes(f *framework.Framework) ([]v1.Node, error) {
-	return GetNodesByRole(f, RoleWorker)
+	return GetNodesByRole(f, e2eutils.RoleWorker)
 }
 
 // GetByRole returns all nodes with the specified role
 func GetNodesByRole(f *framework.Framework, role string) ([]v1.Node, error) {
-	selector, err := labels.Parse(fmt.Sprintf("%s/%s=", LabelRole, role))
+	selector, err := labels.Parse(fmt.Sprintf("%s/%s=", e2eutils.LabelRole, role))
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +104,5 @@ func LabelNode(f *framework.Framework, node *v1.Node, newLabels map[string]strin
 	}
 
 	_, err = f.ClientSet.CoreV1().Nodes().Patch(context.TODO(), node.Name, types.JSONPatchType, payloadBytes, metav1.PatchOptions{})
-	if err != nil {
-		return err
-	}
-	return nil
+	return err
 }

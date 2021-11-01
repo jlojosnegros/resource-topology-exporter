@@ -35,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kubernetes/test/e2e/framework"
 
+	e2eutils "github.com/k8stopologyawareschedwg/resource-topology-exporter/test/e2e/utils"
 	e2enodes "github.com/k8stopologyawareschedwg/resource-topology-exporter/test/e2e/utils/nodes"
 	e2enodetopology "github.com/k8stopologyawareschedwg/resource-topology-exporter/test/e2e/utils/nodetopology"
 	e2epods "github.com/k8stopologyawareschedwg/resource-topology-exporter/test/e2e/utils/pods"
@@ -74,7 +75,7 @@ var _ = ginkgo.Describe("[TopologyUpdater][InfraConsuming] Node topology updater
 			// but in an environment with multiple worker nodes, we might be looking at the wrong node.
 			// thus, we assign a unique label to the picked worker node
 			// and making sure to deploy the pod on it during the test using nodeSelector
-			err = e2enodes.LabelNode(f, topologyUpdaterNode, map[string]string{e2enodes.TestNodeLabel: ""})
+			err = e2enodes.LabelNode(f, topologyUpdaterNode, map[string]string{e2eutils.TestNodeLabel: ""})
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 			tmPolicy = e2etestenv.GetTopologyManagerPolicy()
