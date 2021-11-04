@@ -7,11 +7,13 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	podresourcesapi "k8s.io/kubelet/pkg/apis/podresources/v1"
 
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/kubeconf"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/nrtupdater"
+	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/podreadiness"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/podrescli"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/prometheus"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/resourcemonitor"
@@ -31,6 +33,7 @@ type Args struct {
 	KubeletStateDirs       []string
 	PodResourcesSocketPath string
 	SleepInterval          time.Duration
+	PodReadinessEnable     bool
 }
 
 type PollTrigger struct {
@@ -44,19 +47,34 @@ func Execute(cli podresourcesapi.PodResourcesListerClient, nrtupdaterArgs nrtupd
 		return err
 	}
 
-	resMon, err := NewResourceMonitor(cli, resourcemonitorArgs, rteArgs)
+	cs, err := nrtupdater.GetK8sClient("")
+	if err != nil {
+		return err
+	}
+
+	var condChan chan v1.PodCondition
+	if rteArgs.PodReadinessEnable {
+		condChan = make(chan v1.PodCondition)
+		condIn, err := podreadiness.NewConditionInjector(cs)
+		if err != nil {
+			return err
+		}
+		condIn.Run(condChan)
+	}
+
+	resMon, err := NewResourceMonitor(cli, resourcemonitorArgs)
 	if err != nil {
 		return err
 	}
 
 	eventsChan := make(chan PollTrigger)
-	infoChannel, _ := resMon.Run(eventsChan)
+	infoChannel, _ := resMon.Run(eventsChan, condChan)
 
 	upd, err := nrtupdater.NewNRTUpdater(nrtupdaterArgs, tmPolicy)
 	if err != nil {
 		return fmt.Errorf("failed to initialize NRT updater: %w", err)
 	}
-	upd.Run(infoChannel)
+	upd.Run(infoChannel, condChan)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -138,9 +156,10 @@ func IsTriggeringFSNotifyEvent(event fsnotify.Event) bool {
 type ResourceMonitor struct {
 	resMon      resourcemonitor.ResourceMonitor
 	excludeList resourcemonitor.ResourceExcludeList
+	condInj     *podreadiness.ConditionInjector
 }
 
-func NewResourceMonitor(cli podresourcesapi.PodResourcesListerClient, args resourcemonitor.Args, rteArgs Args) (*ResourceMonitor, error) {
+func NewResourceMonitor(cli podresourcesapi.PodResourcesListerClient, args resourcemonitor.Args) (*ResourceMonitor, error) {
 	resMon, err := resourcemonitor.NewResourceMonitor(cli, args)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize ResourceMonitor: %w", err)
@@ -152,9 +171,21 @@ func NewResourceMonitor(cli podresourcesapi.PodResourcesListerClient, args resou
 	}, nil
 }
 
-func (rm *ResourceMonitor) Run(eventsChan <-chan PollTrigger) (<-chan nrtupdater.MonitorInfo, chan<- struct{}) {
+func (rm *ResourceMonitor) NewCondition(status v1.ConditionStatus) v1.PodCondition {
+	cond := podreadiness.NewConditionTemplate(podreadiness.ResourcesScanned, status)
+
+	if status == v1.ConditionFalse {
+		cond.Reason = "ScanFailed"
+		cond.Message = "failed to scan pod resources"
+	}
+
+	return cond
+}
+
+func (rm *ResourceMonitor) Run(eventsChan <-chan PollTrigger, condChan chan<- v1.PodCondition) (<-chan nrtupdater.MonitorInfo, chan<- struct{}) {
 	infoChannel := make(chan nrtupdater.MonitorInfo)
 	done := make(chan struct{})
+	var condStatus v1.ConditionStatus
 	go func() {
 		lastWakeup := time.Now()
 		for {
@@ -173,12 +204,17 @@ func (rm *ResourceMonitor) Run(eventsChan <-chan PollTrigger) (<-chan nrtupdater
 
 				if err != nil {
 					klog.Warningf("failed to scan pod resources: %w\n", err)
+					condStatus = v1.ConditionFalse
 					continue
 				}
+				condStatus = v1.ConditionTrue
 				infoChannel <- monInfo
 
 				tsDiff := tsEnd.Sub(tsBegin)
 				prometheus.UpdateOperationDelayMetric("podresources_scan", monInfo.UpdateReason(), float64(tsDiff.Milliseconds()))
+				if condChan != nil {
+					condChan <- rm.NewCondition(condStatus)
+				}
 			case <-done:
 				klog.Infof("read stop at %v", time.Now())
 				break

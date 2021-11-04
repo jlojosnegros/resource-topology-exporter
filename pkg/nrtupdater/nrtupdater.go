@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 
 	v1alpha1 "github.com/k8stopologyawareschedwg/noderesourcetopology-api/pkg/apis/topology/v1alpha1"
+	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/podreadiness"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/prometheus"
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/utils"
 )
@@ -108,15 +110,28 @@ func (te *NRTUpdater) Update(info MonitorInfo) error {
 	return nil
 }
 
-func (te *NRTUpdater) Run(infoChannel <-chan MonitorInfo) chan<- struct{} {
+func (te *NRTUpdater) NewCondition(status v1.ConditionStatus) v1.PodCondition {
+	cond := podreadiness.NewConditionTemplate(podreadiness.TopologyUpdated, status)
+
+	if status == v1.ConditionFalse {
+		cond.Reason = "UpdateFailed"
+		cond.Message = "failed to update noderesourcetopology object"
+	}
+	return cond
+}
+
+func (te *NRTUpdater) Run(infoChannel <-chan MonitorInfo, condChan chan v1.PodCondition) chan<- struct{} {
 	done := make(chan struct{})
+	var status v1.ConditionStatus
 	go func() {
 		for {
 			select {
 			case info := <-infoChannel:
 				tsBegin := time.Now()
+				status = v1.ConditionTrue
 				if err := te.Update(info); err != nil {
 					klog.Warning("failed to update: %v", err)
+					status = v1.ConditionFalse
 				}
 				tsEnd := time.Now()
 
@@ -125,6 +140,9 @@ func (te *NRTUpdater) Run(infoChannel <-chan MonitorInfo) chan<- struct{} {
 				if te.args.Oneshot {
 					break
 				}
+				if condChan != nil {
+					condChan <- te.NewCondition(status)
+				}
 			case <-done:
 				klog.Infof("update stop at %v", time.Now())
 				break
@@ -132,4 +150,13 @@ func (te *NRTUpdater) Run(infoChannel <-chan MonitorInfo) chan<- struct{} {
 		}
 	}()
 	return done
+}
+
+func (te *NRTUpdater) runStatusUpdater(statusChan chan v1.ConditionStatus) {
+	go func() {
+		for {
+			status := <-statusChan
+			te.NewCondition(status)
+		}
+	}()
 }
