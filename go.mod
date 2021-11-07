@@ -7,19 +7,25 @@ require (
 	github.com/ghodss/yaml v1.0.0
 	github.com/google/go-cmp v0.5.5
 	github.com/hashicorp/go-version v1.3.0
+	github.com/imdario/mergo v0.3.12 // indirect
 	github.com/jaypipes/ghw v0.8.1-0.20210609141030-acb1a36eaf89
 	github.com/k8stopologyawareschedwg/noderesourcetopology-api v0.0.10
-	github.com/onsi/ginkgo v1.14.0
-	github.com/onsi/gomega v1.10.1
+	github.com/onsi/ginkgo v1.16.4
+	github.com/onsi/gomega v1.13.0
 	github.com/prometheus/client_golang v1.11.0
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/smartystreets/goconvey v1.6.4
 	github.com/stretchr/testify v1.7.0
+	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/grpc v1.38.0
+	gopkg.in/gcfg.v1 v1.2.3 // indirect
+	gopkg.in/warnings.v0 v0.1.2 // indirect
 	k8s.io/api v0.22.0
+	k8s.io/apiextensions-apiserver v0.21.2
 	k8s.io/apimachinery v0.22.0
 	k8s.io/client-go v0.22.0
 	k8s.io/klog/v2 v2.9.0
+	k8s.io/kube-scheduler v0.21.0 // indirect
 	k8s.io/kubelet v0.22.0
 	k8s.io/kubernetes v1.22.0
 	sigs.k8s.io/yaml v1.2.0
@@ -56,4 +62,9 @@ replace (
 	k8s.io/mount-utils => k8s.io/mount-utils v0.22.0
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.22.0
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.22.0
+)
+
+replace (
+	github.com/onsi/ginkgo => github.com/onsi/ginkgo v1.14.0
+	github.com/onsi/gomega => github.com/onsi/gomega v1.10.1
 )
