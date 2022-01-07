@@ -19,14 +19,28 @@ import (
 	"github.com/k8stopologyawareschedwg/resource-topology-exporter/pkg/notification"
 )
 
-type RateLimitedEventSource struct {
-	es    notification.EventSource
-	inCh  <-chan notification.Event
-	outCh chan notification.Event
-	rt    ratelimit.Limiter
+//Size of the buffered channel used to handle events
+// TODO: Should it be an input parameter?
+const bufferSize uint16 = 5
 
-	doneChan chan struct{}
-	stopChan chan struct{}
+// The ratelimiter is a kind of man-in-the-middle.
+// It provides an input interface with a channel for a writter to send events at any rate
+// and an ouput interface with another channel where a reader will receive events at a configured rate
+// At the input interface the main goals are:
+// - writer should not block at all or tha minimum time possible.
+// - If there is no more room for events in the "bucket" the write should not block at all but "fail" silently.
+// At the output interface the reader should get the events not faster than the configured rate, blocking if there is no event to read.
+type RateLimitedEventSource struct {
+	es       notification.EventSource
+	inCh     <-chan notification.Event
+	bufferCh chan notification.Event
+	outCh    chan notification.Event
+	rt       ratelimit.Limiter
+
+	doneSenderCh   chan struct{}
+	doneReceiverCh chan struct{}
+	stopSenderCh   chan struct{}
+	stopReceiverCh chan struct{}
 }
 
 func NewRateLimitedEventSource(es notification.EventSource, maxEventsPerTimeUnit uint64, timeUnit time.Duration) (*RateLimitedEventSource, error) {
@@ -34,9 +48,13 @@ func NewRateLimitedEventSource(es notification.EventSource, maxEventsPerTimeUnit
 	rles := RateLimitedEventSource{
 		es:       es,
 		inCh:     es.Events(),
+		bufferCh: make(chan notification.Event, bufferSize),
 		outCh:    make(chan notification.Event),
-		doneChan: make(chan struct{}, 1),
-		stopChan: make(chan struct{}),
+
+		doneSenderCh:   make(chan struct{}, 1),
+		doneReceiverCh: make(chan struct{}, 1),
+		stopSenderCh:   make(chan struct{}),
+		stopReceiverCh: make(chan struct{}),
 	}
 
 	options := ratelimit.Per(timeUnit)
@@ -50,18 +68,21 @@ func (rles *RateLimitedEventSource) Events() <-chan notification.Event {
 }
 
 func (rles *RateLimitedEventSource) Run() {
-	go rles.run()
+	rles.run()
 	rles.es.Run()
 }
 
 func (rles *RateLimitedEventSource) Stop() {
+	//Attention: First stop the source and then the RateLimiter!
+	// otherwise source could block trying to write on input channel
+	// with nobody reading from it.
 	rles.es.Stop()
+	rles.es.Wait()
 	rles.stop()
 }
 
 func (rles *RateLimitedEventSource) Wait() {
 	rles.wait()
-	rles.es.Wait()
 }
 
 func (rles *RateLimitedEventSource) Close() {
@@ -69,25 +90,57 @@ func (rles *RateLimitedEventSource) Close() {
 	rles.es.Close()
 }
 
+// run launch two different goroutines to avoid decorated event source
+// to block on writting an event while the other one delivers events
+// at the configured rate.
+// see: receiver and sender functions for more info
 func (rles *RateLimitedEventSource) run() {
-	keepgoing := true
-	for keepgoing {
-		select {
-		case event := <-rles.inCh:
-			rles.rt.Take()
-			rles.outCh <- event
-		case <-rles.stopChan:
-			keepgoing = false
-		}
-	}
-	rles.doneChan <- struct{}{}
+	go rles.sender()
+	go rles.receiver()
 }
 
-// Wait stops the caller until the EventSource is exhausted
+// receiver read from the input channel and move the event to bufferCh as fast as possible
+//so it could be available to read again an so minimize the amount of time the
+//decorated EventSource is blocked trying to write a new event in the "input" channel.
+// Also the write in bufferCh is done so if it is full the operation silently "fails"
+//instead of block
+func (rles *RateLimitedEventSource) receiver() {
+	for {
+		select {
+		case incomingEvent := <-rles.inCh:
+			select {
+			case rles.bufferCh <- incomingEvent:
+			default:
+			}
+		case <-rles.stopReceiverCh:
+			rles.doneReceiverCh <- struct{}{}
+			return
+		}
+	}
+}
+
+// sender read events from the bufferCh and write it in the "output" channel at the configured rate.
+func (rles *RateLimitedEventSource) sender() {
+	for {
+		select {
+		case event := <-rles.bufferCh:
+			rles.rt.Take()
+			rles.outCh <- event
+		case <-rles.stopSenderCh:
+			rles.doneSenderCh <- struct{}{}
+			return
+		}
+	}
+
+}
+
+// wait stops the caller until the EventSource is exhausted
 func (rles *RateLimitedEventSource) wait() {
-	<-rles.doneChan
+	<-rles.doneReceiverCh
+	<-rles.doneSenderCh
 }
 
 func (rles *RateLimitedEventSource) stop() {
-	rles.stopChan <- struct{}{}
+	rles.stopReceiverCh <- struct{}{}
+	rles.stopSenderCh <- struct{}{}
 }

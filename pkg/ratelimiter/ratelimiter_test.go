@@ -105,21 +105,42 @@ func TestLimitedRateLimit(t *testing.T) {
 	idealPeriodMicroseconds := time.Duration(timeUnit.Microseconds()/numberOfEvents) * time.Microsecond
 	hysteresisMicroseconds := time.Duration((idealPeriodMicroseconds.Microseconds()*histeresisPercentage)/100) * time.Microsecond
 
+	var errors []timeError
 	for idx, r := range results {
-		if !WithinDuration(r.TsLastRcv.Add(idealPeriodMicroseconds), r.TsRcv, hysteresisMicroseconds) {
-			t.Fatalf("Error in result %d:%v", idx, r)
+		if dt, ok := WithinDuration(r.TsLastRcv.Add(idealPeriodMicroseconds), r.TsRcv, hysteresisMicroseconds); !ok {
+			errors = append(errors, timeError{
+				Result:     r,
+				Index:      idx,
+				Delta:      dt,
+				Hysteresis: hysteresisMicroseconds,
+			})
 		}
+	}
+
+	if len(errors) != 0 {
+		for _, e := range errors {
+			t.Logf("Error in result: %v", e)
+		}
+		t.Fatal("Errors detected\n")
+
 	}
 }
 
-func WithinDuration(expected, actual time.Time, delta time.Duration) bool {
+func WithinDuration(expected, actual time.Time, delta time.Duration) (time.Duration, bool) {
 	dt := expected.Sub(actual)
-	return dt >= -delta && dt <= delta
+	return dt, dt >= -delta && dt <= delta
 }
 
 type result struct {
 	TsLastRcv time.Time
 	TsRcv     time.Time
+}
+
+type timeError struct {
+	Result     result
+	Delta      time.Duration
+	Hysteresis time.Duration
+	Index      int
 }
 
 func receiver(t *testing.T, readCh <-chan notification.Event, sync <-chan struct{}, results *[]result) {
